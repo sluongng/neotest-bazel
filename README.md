@@ -2,6 +2,8 @@
 
 A Neotest adapter to run tests with Bazel.
 
+![image](https://github.com/user-attachments/assets/b07dd5f1-3725-4c29-a580-fc99b89be1bb)
+
 ## Installation
 
 #### With 💤 Lazy.nvim
