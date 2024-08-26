@@ -2,7 +2,8 @@
 
 A Neotest adapter to run tests with Bazel.
 
-![image](https://github.com/user-attachments/assets/6814e3d6-ab53-4d9f-9f8c-89d768d82fbb)
+![image](https://github.com/user-attachments/assets/064113db-5b3f-4c91-9639-5547d30f0064)
+
 
 ## Table of Contents
 
