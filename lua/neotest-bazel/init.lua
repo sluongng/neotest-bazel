@@ -1,13 +1,21 @@
 local logger = require("neotest.logging")
 
-local BazelAdapter = {}
+local M = {}
+
+--- See neotest.Adapter for the full interface.
+--- @class Adapter : neotest.Adapter
+--- @field name string
+M.Adapter = {
+  name = "neotest-bazel",
+  init = function() end,
+}
 
 ---Find the project root directory given a current directory to work from.
 ---Should no root be found, the adapter can still be used in a non-project context if a test file matches.
 ---@async
 ---@param _dir string @Directory to treat as cwd
 ---@return string | nil @Absolute root dir of test suite
-function BazelAdapter.root(_dir)
+function M.Adapter.root(_dir)
   local root = vim.system({ 'bazel', 'info', 'workspace' }, { text = true }):wait().stdout
   if root == nil then
     return nil
@@ -26,7 +34,7 @@ end
 ---@param rel_path string Path to directory, relative to root
 ---@param _root string Root directory of project
 ---@return boolean
-function BazelAdapter.filter_dir(_name, rel_path, _root)
+function M.Adapter.filter_dir(_name, rel_path, _root)
   local result = vim.system({
     'bazel', 'query',
     '--bes_results_url=', '--bes_backend=',
@@ -95,7 +103,7 @@ end
 ---@async
 ---@param file_path string
 ---@return boolean
-function BazelAdapter.is_test_file(file_path)
+function M.Adapter.is_test_file(file_path)
   local file_info = get_file_info(file_path)
   return file_info.test_target ~= nil and file_info.test_target ~= ''
 end
@@ -137,7 +145,7 @@ end
 ---@async
 ---@param file_path string Absolute file path
 ---@return neotest.Tree | nil
-function BazelAdapter.discover_positions(file_path)
+function M.Adapter.discover_positions(file_path)
   local lib = require("neotest.lib")
   local ext = vim.filetype.match({ filename = file_path })
   if ext == "go" then
@@ -348,7 +356,7 @@ end
 
 ---@param args neotest.RunArgs
 ---@return nil | neotest.RunSpec | neotest.RunSpec[]
-function BazelAdapter.build_spec(args)
+function M.Adapter.build_spec(args)
   local tree = args.tree
   local pos = tree:data()
   local ext = vim.filetype.match({ filename = pos.path })
@@ -396,7 +404,7 @@ end
 ---@param _result neotest.StrategyResult
 ---@param tree neotest.Tree
 ---@return table<string, neotest.Result>
-function BazelAdapter.results(spec, _result, tree)
+function M.Adapter.results(spec, _result, tree)
   local xml = require('neotest.lib.xml')
   local file = require('neotest.lib.file')
 
@@ -458,4 +466,4 @@ function BazelAdapter.results(spec, _result, tree)
   return neotest_results
 end
 
-return BazelAdapter
+return M.Adapter
