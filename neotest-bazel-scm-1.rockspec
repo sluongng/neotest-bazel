@@ -5,7 +5,8 @@ source = {
   url = "git+https://github.com/sluongng/neotest-bazel.git",
 }
 dependencies = {
-  "nvim-neotest/neotest"
+  "neotest",
+  "plenary.nvim",
 }
 test_dependencies = {
   "nlua"
