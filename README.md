@@ -87,8 +87,6 @@ Big organizations like Google, Uber, and Dropbox use Bazel to build and test the
 - Running multiple tests under the same Bazel target could override the test log and xml.
   Neotest does not have a way to batch up multiple test runs _yet_.
 
-- Parsing sharded XML test results is broken.
-
 ## Acknowledgements
 
 - This was initially developed as a Hackathon project in [BuildBuddy](https://buildbuddy.io).

@@ -326,7 +326,7 @@ function M.Adapter.discover_positions(file_path)
 ]]
 
     local query = test_class_query .. parameterized_test_query
-    return lib.treesitter.parse_positions(file_path, query)
+    return lib.treesitter.parse_positions(file_path, query, {})
   end
 end
 
@@ -414,51 +414,61 @@ function M.Adapter.results(spec, _result, tree)
   end
 
   ---@type string
-  local test_log_dir = vim.trim(bazel_testlogs) ..
+  local test_target_dir = vim.trim(bazel_testlogs) ..
       '/' .. spec.context.file_info.package .. '/' .. spec.context.file_info.target_name
-
-  local junit_xml = test_log_dir .. '/test.xml'
-  local junit_data = xml.parse(file.read(junit_xml))
 
   ---@type table<string, neotest.Result>
   local neotest_results = {}
-
   local pos = tree:data()
   if pos.type == "dir" or pos.type == "namespace" then
     vim.print("Directory or namespace is not supported yet")
     return neotest_results
   end
 
-  for _, testsuite in pairs(junit_data.testsuites) do
-    for _, testcase in pairs(testsuite.testcase) do
-      logger.debug("Testcase: " .. vim.inspect(testcase))
-      local test_name = ''
-      if testcase._attr then
-        test_name = testcase._attr.name
-      else
-        test_name = testcase.name
-      end
-      test_name = test_name:gsub("/", "::")
-      local file_name = vim.split(pos.id, '::')[1]
-      test_name = file_name .. '::' .. test_name
+  -- For each Bazel test target, there could be one direct "test.xml" and "test.log" file
+  -- or multiple "test.xml" and "test.log" files in subdirectories for sharded tests.
+  local xml_files = vim.fs.find("test.xml", {
+    path = test_target_dir,
+    type = "file",
+    limit = math.huge,
+  })
+  vim.print("Looking for test.xml in " .. test_target_dir .. " found " .. #xml_files .. " files")
+  for _, junit_xml in pairs(xml_files) do
+    local junit_data = xml.parse(file.read(junit_xml))
+    for _, testsuite in pairs(junit_data.testsuites) do
+      if testsuite.testcase then
+        for _, testcase in pairs(testsuite.testcase) do
+          logger.debug("Testcase: " .. vim.inspect(testcase))
+          local test_name = ''
+          if testcase._attr then
+            test_name = testcase._attr.name
+          else
+            test_name = testcase.name
+          end
+          test_name = test_name:gsub("/", "::")
+          local file_name = vim.split(pos.id, '::')[1]
+          test_name = file_name .. '::' .. test_name
 
-      if testcase.failure then
-        neotest_results[test_name] = {
-          status = 'failed',
-          output = test_log_dir .. '/' .. 'test.log',
-          short = testcase.failure._attr.message,
-          errors = {
-            {
-              message = testcase.failure._attr.message,
-              line = pos.range[1],
-            },
-          },
-        }
-      else
-        neotest_results[test_name] = {
-          status = 'passed',
-          output = test_log_dir .. '/' .. 'test.log',
-        }
+          local test_log_dir = vim.fs.dirname(junit_xml)
+          if testcase.failure then
+            neotest_results[test_name] = {
+              status = 'failed',
+              output = test_log_dir .. '/' .. 'test.log',
+              short = testcase.failure._attr.message,
+              errors = {
+                {
+                  message = testcase.failure._attr.message,
+                  line = pos.range[1],
+                },
+              },
+            }
+          else
+            neotest_results[test_name] = {
+              status = 'passed',
+              output = test_log_dir .. '/' .. 'test.log',
+            }
+          end
+        end
       end
     end
   end
