@@ -43,11 +43,14 @@ function M.Adapter.filter_dir(_name, rel_path, _root)
   return code == 0
 end
 
+---@class Bazel.target
+---@field label string
+---@field name string
+
 ---@class Bazel.file_info
 ---@field package string
 ---@field file_target string
----@field test_target string | nil
----@field target_name string | nil
+---@field test_targets Bazel.target[] | nil
 
 ---@async
 ---@param file_path string
@@ -92,11 +95,15 @@ local get_file_info = function(file_path)
     '--infer_universe_scope', '--order_output=no',
     test_query
   }, { stdout = true, stderr = false })
-  local test_target = vim.trim(result.stdout)
-  file_info.test_target = test_target
-
-  -- Turn '//foo/bar:baz' into 'baz'
-  file_info.target_name = test_target:match(":(.*)$")
+  local test_targets = vim.split(vim.trim(result.stdout), '\n')
+  file_info.test_targets = {}
+  for _, test_target in ipairs(test_targets) do
+    table.insert(file_info.test_targets, {
+      label = test_target,
+      -- Turn '//foo/bar:baz' into 'baz'
+      name = test_target:match(":(.*)$"),
+    })
+  end
 
   return file_info
 end
@@ -106,38 +113,38 @@ end
 ---@return boolean
 function M.Adapter.is_test_file(file_path)
   local file_info = get_file_info(file_path)
-  return file_info.test_target ~= nil and file_info.test_target ~= ''
-end
-
---- This was taken from neotest
-local function get_match_type(captured_nodes)
-  if captured_nodes["test.name"] then
-    return "test"
-  end
-  if captured_nodes["namespace.name"] then
-    return "namespace"
-  end
+  return file_info.test_targets ~= nil and #file_info.test_targets > 0
 end
 
 --- Build the tree position from the captured nodes manually
 --- so that we could scrub the quotes from the name.
 ---
 --- This was taken from neotest with some modifications
+---@param file_path string
+---@param source string
+---@param captured_nodes table<string, TSNode>
+---@return neotest.Position|neotest.Position[]|nil
 local function build_position(file_path, source, captured_nodes)
-  local match_type = get_match_type(captured_nodes)
-  if match_type then
-    ---@type string
-    local name = vim.treesitter.get_node_text(captured_nodes[match_type .. ".name"], source)
-    name = name:gsub('"', "") -- Remove quotes
-    local definition = captured_nodes[match_type .. ".definition"]
-
-    return {
-      type = match_type,
-      path = file_path,
-      name = name,
-      range = { definition:range() },
-    }
+  local match_type = nil
+  if captured_nodes["test.name"] then
+    match_type = "test"
+  elseif captured_nodes["namespace.name"] then
+    match_type = "namespace"
   end
+  if match_type == nil then
+    return nil
+  end
+
+  ---@type string
+  local name = vim.treesitter.get_node_text(captured_nodes[match_type .. ".name"], source)
+  name = name:gsub('"', "") -- Remove quotes
+  local definition = captured_nodes[match_type .. ".definition"]
+  return {
+    type = match_type,
+    path = file_path,
+    name = name,
+    range = { definition:range() },
+  }
 end
 
 ---Given a file path, parse all the tests within it by using different tree-sitter persist_queries
@@ -147,7 +154,7 @@ end
 ---@param file_path string Absolute file path
 ---@return neotest.Tree | nil
 function M.Adapter.discover_positions(file_path)
-  local lib = require("neotest.lib")
+  local treesitter = require("neotest.lib.treesitter")
   local ext = vim.filetype.match({ filename = file_path })
   if ext == "go" then
     local test_func_query = [[
@@ -299,7 +306,7 @@ function M.Adapter.discover_positions(file_path)
         list_test_table_wrapped_query ..
         test_table_inline_struct_query ..
         map_test_table_query
-    local tree = lib.treesitter.parse_positions(file_path, query, {
+    local tree = treesitter.parse_positions(file_path, query, {
       fast = true,
       nested_tests = true,
       build_position = build_position,
@@ -327,7 +334,7 @@ function M.Adapter.discover_positions(file_path)
 ]]
 
     local query = test_class_query .. parameterized_test_query
-    return lib.treesitter.parse_positions(file_path, query, {})
+    return treesitter.parse_positions(file_path, query, {})
   end
 end
 
@@ -373,10 +380,14 @@ function M.Adapter.build_spec(args)
         file_info = file_info,
         test_filter = test_name,
       }
-      return {
-        command = { "bazel", "test", file_info.test_target, "--test_filter=" .. test_name },
-        context = context,
-      }
+      local run_specs = {}
+      for _, test_target in ipairs(file_info.test_targets) do
+        table.insert(run_specs, {
+          command = { "bazel", "test", test_target.label, "--test_filter=" .. test_name },
+          context = context,
+        })
+      end
+      return run_specs
     end
   elseif pos.type == "file" then
     if ext == "go" then
@@ -387,10 +398,14 @@ function M.Adapter.build_spec(args)
         language = "go",
         file_info = file_info,
       }
-      return {
-        command = { "bazel", "test", file_info.test_target, },
-        context = context,
-      }
+      local run_specs = {}
+      for _, test_target in ipairs(file_info.test_targets) do
+        table.insert(run_specs, {
+          command = { "bazel", "test", test_target.label },
+          context = context,
+        })
+      end
+      return run_specs
     end
   elseif pos.type == "dir" or pos.type == "namespace" then
     vim.print("Directory or namespace is not supported yet")
@@ -412,11 +427,6 @@ function M.Adapter.results(spec, _result, tree)
   local _code, result = process.run({ 'bazel', 'info', 'bazel-testlogs' }, { stdout = true, stderr = false })
   local bazel_testlogs = vim.trim(result.stdout)
 
-  ---@type string
-  local test_target_dir = bazel_testlogs .. '/' ..
-      spec.context.file_info.package .. '/' ..
-      spec.context.file_info.target_name
-
   ---@type table<string, neotest.Result>
   local neotest_results = {}
   local pos = tree:data()
@@ -425,48 +435,54 @@ function M.Adapter.results(spec, _result, tree)
     return neotest_results
   end
 
-  -- For each Bazel test target, there could be one direct "test.xml" and "test.log" file
-  -- or multiple "test.xml" and "test.log" files in subdirectories for sharded tests.
-  local xml_files = vim.fs.find("test.xml", {
-    path = test_target_dir,
-    type = "file",
-    limit = math.huge,
-  })
-  vim.print("Looking for test.xml in " .. test_target_dir .. " found " .. #xml_files .. " files")
-  for _, junit_xml in pairs(xml_files) do
-    local junit_data = xml.parse(file.read(junit_xml))
-    for _, testsuite in pairs(junit_data.testsuites) do
-      if testsuite.testcase then
-        for _, testcase in pairs(testsuite.testcase) do
-          logger.debug("Testcase: " .. vim.inspect(testcase))
-          local test_name = ''
-          if testcase._attr then
-            test_name = testcase._attr.name
-          else
-            test_name = testcase.name
-          end
-          test_name = test_name:gsub("/", "::")
-          local file_name = vim.split(pos.id, '::')[1]
-          test_name = file_name .. '::' .. test_name
+  for _, target_name in ipairs(spec.context.file_info.test_targets) do
+    ---@type string
+    local test_target_dir = bazel_testlogs .. '/' ..
+        spec.context.file_info.package .. '/' ..
+        target_name.name
 
-          local test_log_dir = vim.fs.dirname(junit_xml)
-          if testcase.failure then
-            neotest_results[test_name] = {
-              status = 'failed',
-              output = test_log_dir .. '/' .. 'test.log',
-              short = testcase.failure._attr.message,
-              errors = {
-                {
-                  message = testcase.failure._attr.message,
-                  line = pos.range[1],
+    -- For each Bazel test target, there could be one direct "test.xml" and "test.log" file
+    -- or multiple "test.xml" and "test.log" files in subdirectories for sharded tests.
+    local xml_files = vim.fs.find("test.xml", {
+      path = test_target_dir,
+      type = "file",
+      limit = math.huge,
+    })
+    for _, junit_xml in pairs(xml_files) do
+      local junit_data = xml.parse(file.read(junit_xml))
+      for _, testsuite in pairs(junit_data.testsuites) do
+        if testsuite.testcase then
+          for _, testcase in pairs(testsuite.testcase) do
+            logger.debug("Testcase: " .. vim.inspect(testcase))
+            local test_name = ''
+            if testcase._attr then
+              test_name = testcase._attr.name
+            else
+              test_name = testcase.name
+            end
+            test_name = test_name:gsub("/", "::")
+            local file_name = vim.split(pos.id, '::')[1]
+            test_name = file_name .. '::' .. test_name
+
+            local test_log_dir = vim.fs.dirname(junit_xml)
+            if testcase.failure then
+              neotest_results[test_name] = {
+                status = 'failed',
+                output = test_log_dir .. '/' .. 'test.log',
+                short = testcase.failure._attr.message,
+                errors = {
+                  {
+                    message = testcase.failure._attr.message,
+                    line = pos.range[1],
+                  },
                 },
-              },
-            }
-          else
-            neotest_results[test_name] = {
-              status = 'passed',
-              output = test_log_dir .. '/' .. 'test.log',
-            }
+              }
+            else
+              neotest_results[test_name] = {
+                status = 'passed',
+                output = test_log_dir .. '/' .. 'test.log',
+              }
+            end
           end
         end
       end
