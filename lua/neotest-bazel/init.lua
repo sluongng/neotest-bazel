@@ -1,4 +1,5 @@
 local logger = require("neotest.logging")
+local process = require("neotest.lib.process")
 
 local M = {}
 
@@ -16,15 +17,12 @@ M.Adapter = {
 ---@param _dir string @Directory to treat as cwd
 ---@return string | nil @Absolute root dir of test suite
 function M.Adapter.root(_dir)
-  local root = vim.system({ 'bazel', 'info', 'workspace' }, { text = true }):wait().stdout
-  if root == nil then
+  local code, result = process.run({ 'bazel', 'info', 'workspace' }, { stdout = true, stderr = false })
+  if code ~= 0 then
     return nil
   end
-  root = vim.trim(root)
-  if root == '' then
-    return nil
-  end
-  return root
+  local root = vim.trim(result.stdout)
+  return vim.trim(root)
 end
 
 ---Filter directories when searching for test files
@@ -35,13 +33,14 @@ end
 ---@param _root string Root directory of project
 ---@return boolean
 function M.Adapter.filter_dir(_name, rel_path, _root)
-  local result = vim.system({
+  local code, _ = process.run({
     'bazel', 'query',
     '--bes_results_url=', '--bes_backend=',
+    '--infer_universe_scope', '--order_output=no',
     '--output=package',
     rel_path
-  }, { text = true }):wait()
-  return result.code == 0
+  }, { stdout = false, stderr = false })
+  return code == 0
 end
 
 ---@class Bazel.file_info
@@ -60,24 +59,26 @@ local get_file_info = function(file_path)
 
   local file_info = {}
 
-  local result = vim.system({
+  local _code, result = process.run({
     'bazel', 'query',
     '--bes_results_url=', '--bes_backend=',
+    '--infer_universe_scope', '--order_output=no',
     '--output=package',
     relative_path
-  }, { text = true }):wait()
+  }, { stdout = true, stderr = false })
   local bazel_package = vim.trim(result.stdout)
   if bazel_package == '' then
     return file_info
   end
   file_info.package = bazel_package
 
-  result = vim.system({
+  _code, result = process.run({
     'bazel', 'query',
     '--bes_results_url=', '--bes_backend=',
+    '--infer_universe_scope', '--order_output=no',
     '--output=label',
     relative_path
-  }, { text = true }):wait()
+  }, { stdout = true, stderr = false })
   local label = vim.trim(result.stdout)
   if label == '' then
     return file_info
@@ -85,12 +86,12 @@ local get_file_info = function(file_path)
   file_info.label = label
 
   local test_query = 'tests(rdeps(' .. bazel_package .. ':all, ' .. label .. ', 1))'
-  result = vim.system({
+  _code, result = process.run({
     'bazel', 'query',
     '--bes_results_url=', '--bes_backend=',
     '--infer_universe_scope', '--order_output=no',
     test_query
-  }, { text = true }):wait()
+  }, { stdout = true, stderr = false })
   local test_target = vim.trim(result.stdout)
   file_info.test_target = test_target
 
@@ -408,14 +409,13 @@ function M.Adapter.results(spec, _result, tree)
   local xml = require('neotest.lib.xml')
   local file = require('neotest.lib.file')
 
-  local bazel_testlogs = vim.system({ 'bazel', 'info', 'bazel-testlogs' }, { text = true }):wait().stdout
-  if bazel_testlogs == nil then
-    return {}
-  end
+  local _code, result = process.run({ 'bazel', 'info', 'bazel-testlogs' }, { stdout = true, stderr = false })
+  local bazel_testlogs = vim.trim(result.stdout)
 
   ---@type string
-  local test_target_dir = vim.trim(bazel_testlogs) ..
-      '/' .. spec.context.file_info.package .. '/' .. spec.context.file_info.target_name
+  local test_target_dir = bazel_testlogs .. '/' ..
+      spec.context.file_info.package .. '/' ..
+      spec.context.file_info.target_name
 
   ---@type table<string, neotest.Result>
   local neotest_results = {}
